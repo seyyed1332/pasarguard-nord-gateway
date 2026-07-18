@@ -71,8 +71,8 @@ export const nordApi = {
   servers: (countryId: number) => fetcher<{ servers: NordServer[] }>('/api/nordvpn/servers', { params: { country_id: countryId } }),
   probe: (coreId: number, privateKey: string, server: NordServer) =>
     fetcher<NordProbeResult>('/api/nordvpn/probe', { method: 'POST', body: { core_id: coreId, private_key: privateKey, server } }),
-  probeBulk: (coreId: number, privateKey: string, servers: NordServer[]) =>
-    fetcher<NordBulkProbeResponse>('/api/nordvpn/probe/bulk', { method: 'POST', body: { core_id: coreId, private_key: privateKey, servers } }),
+  probeBulk: (coreId: number, privateKey: string, servers: NordServer[], signal?: AbortSignal) =>
+    fetcher<NordBulkProbeResponse>('/api/nordvpn/probe/bulk', { method: 'POST', body: { core_id: coreId, private_key: privateKey, servers }, signal }),
   impact: (coreId: number) => fetcher<NordCoreImpact>(`/api/nordvpn/core/${coreId}/impact`),
   gateways: () => fetcher<{ gateways: NordGateway[] }>('/api/nordvpn/gateways'),
 }

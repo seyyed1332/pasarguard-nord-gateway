@@ -7,6 +7,7 @@ Adds a one-session NordVPN gateway workflow to PasarGuard:
 - safe country scanning that checks one endpoint at a time, stops after three
   working results, and automatically selects the fastest endpoint
 - searchable server table with city, endpoint IP, load, and check status
+- cancellable country scans that preserve results already collected
 - inbound-to-Nord routing without replacing the production Xray config
 - gateway topology so other nodes relay through one Nord-connected node
 - version-matched builds, backups, health checks, and automatic rollback

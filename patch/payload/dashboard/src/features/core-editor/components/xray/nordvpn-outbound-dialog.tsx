@@ -13,7 +13,7 @@ import useDirDetection from '@/hooks/use-dir-detection'
 import { nordApi, type NordBulkProbeResult, type NordCoreImpact, type NordCountry, type NordGateway, type NordProbeResult, type NordServer } from '@/service/nordvpn'
 import type { Outbound, Profile } from '@pasarguard/xray-config-kit'
 import { Activity, Check, CircleAlert, KeyRound, Network, Router, Search, ShieldCheck, Zap } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 
 const RELAY_METHOD = '2022-blake3-aes-256-gcm'
@@ -74,6 +74,7 @@ export function NordVpnOutboundDialog({ open, onOpenChange }: NordVpnOutboundDia
   const [bulkProbing, setBulkProbing] = useState(false)
   const [scanResults, setScanResults] = useState<NordBulkProbeResult[]>([])
   const [scanProgress, setScanProgress] = useState('')
+  const scanAbortController = useRef<AbortController | null>(null)
 
   const selectedServer = useMemo(() => servers.find(server => String(server.id) === serverId), [serverId, servers])
   const selectedGateway = useMemo(() => gateways.find(gateway => String(gateway.core_id) === gatewayId), [gatewayId, gateways])
@@ -110,6 +111,8 @@ export function NordVpnOutboundDialog({ open, onOpenChange }: NordVpnOutboundDia
 
   useEffect(() => {
     if (open) return
+    scanAbortController.current?.abort()
+    scanAbortController.current = null
     setToken('')
     setPrivateKey('')
     setCountryId('')
@@ -171,11 +174,13 @@ export function NordVpnOutboundDialog({ open, onOpenChange }: NordVpnOutboundDia
     setProbeResult(null)
     setScanResults([])
     const collected: NordBulkProbeResult[] = []
+    const controller = new AbortController()
+    scanAbortController.current = controller
     try {
       for (let start = 0; start < servers.length; start += BULK_PROBE_BATCH_SIZE) {
         const batch = servers.slice(start, start + BULK_PROBE_BATCH_SIZE)
         setScanProgress(`Testing ${start + 1}-${Math.min(start + batch.length, servers.length)} of ${servers.length}`)
-        const response = await nordApi.probeBulk(coreId, privateKey.trim(), batch)
+        const response = await nordApi.probeBulk(coreId, privateKey.trim(), batch, controller.signal)
         collected.push(...response.results)
         setScanResults([...collected])
         if (collected.filter(result => result.alive).length >= BULK_PROBE_WORKING_TARGET) break
@@ -189,11 +194,18 @@ export function NordVpnOutboundDialog({ open, onOpenChange }: NordVpnOutboundDia
         toast.error(`No working server was found among ${collected.length} endpoints.`)
       }
     } catch (error) {
-      toast.error(apiErrorMessage(error))
+      if (controller.signal.aborted) toast.info(`Scan cancelled after testing ${collected.length} endpoints.`)
+      else toast.error(apiErrorMessage(error))
     } finally {
+      if (scanAbortController.current === controller) scanAbortController.current = null
       setBulkProbing(false)
       setScanProgress('')
     }
+  }
+
+  function cancelServerScan() {
+    scanAbortController.current?.abort()
+    setScanProgress('Cancelling...')
   }
 
   async function checkServer() {
@@ -388,15 +400,20 @@ export function NordVpnOutboundDialog({ open, onOpenChange }: NordVpnOutboundDia
                     Nord allows only one reliable handshake at a time for the same private key.
                   </p>
                 </div>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  disabled={!coreId || !gatewayCoreSafe || !privateKey.trim() || servers.length === 0 || loadingServers || probing || bulkProbing}
-                  isLoading={bulkProbing}
-                  onClick={scanAllServers}
-                >
-                  <Activity className="size-4" />{bulkProbing ? scanProgress : `Find fastest (${servers.length})`}
-                </Button>
+                {bulkProbing ? (
+                  <Button type="button" variant="destructive" onClick={cancelServerScan}>
+                    Cancel scan
+                  </Button>
+                ) : (
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    disabled={!coreId || !gatewayCoreSafe || !privateKey.trim() || servers.length === 0 || loadingServers || probing}
+                    onClick={scanAllServers}
+                  >
+                    <Activity className="size-4" />{`Find fastest (${servers.length})`}
+                  </Button>
+                )}
               </div>
               {scanResults.length ? (
                 <div className="space-y-2 border-t border-cyan-500/20 pt-3">
