@@ -12,7 +12,7 @@ import { appendRawXrayConfig } from '@/features/core-editor/kit/xray-adapter'
 import useDirDetection from '@/hooks/use-dir-detection'
 import { nordApi, type NordBulkProbeResult, type NordCoreImpact, type NordCountry, type NordGateway, type NordProbeResult, type NordServer } from '@/service/nordvpn'
 import type { Outbound, Profile } from '@pasarguard/xray-config-kit'
-import { Activity, CircleAlert, KeyRound, Network, Router, ShieldCheck, Zap } from 'lucide-react'
+import { Activity, Check, CircleAlert, KeyRound, Network, Router, Search, ShieldCheck, Zap } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 
@@ -62,6 +62,7 @@ export function NordVpnOutboundDialog({ open, onOpenChange }: NordVpnOutboundDia
   const [countryId, setCountryId] = useState('')
   const [servers, setServers] = useState<NordServer[]>([])
   const [serverId, setServerId] = useState('')
+  const [serverSearch, setServerSearch] = useState('')
   const [impact, setImpact] = useState<NordCoreImpact | null>(null)
   const [gateways, setGateways] = useState<NordGateway[]>([])
   const [gatewayId, setGatewayId] = useState('')
@@ -78,6 +79,13 @@ export function NordVpnOutboundDialog({ open, onOpenChange }: NordVpnOutboundDia
   const selectedGateway = useMemo(() => gateways.find(gateway => String(gateway.core_id) === gatewayId), [gatewayId, gateways])
   const scanResultByServerId = useMemo(() => new Map(scanResults.map(result => [result.server_id, result])), [scanResults])
   const workingScanResults = useMemo(() => scanResults.filter(result => result.alive).sort((a, b) => a.delay - b.delay), [scanResults])
+  const filteredServers = useMemo(() => {
+    const query = serverSearch.trim().toLowerCase()
+    if (!query) return servers
+    return servers.filter(server =>
+      [server.hostname, server.city_name, server.station].some(value => value?.toLowerCase().includes(query)),
+    )
+  }, [serverSearch, servers])
   const relayPortNumber = Number(relayPort)
   const assignedNodeCount = impact?.nodes.length ?? (coreId ? null : 0)
   const gatewayCoreSafe = !coreId || assignedNodeCount === 1
@@ -107,6 +115,7 @@ export function NordVpnOutboundDialog({ open, onOpenChange }: NordVpnOutboundDia
     setCountryId('')
     setServers([])
     setServerId('')
+    setServerSearch('')
     setRelayPort(String(DEFAULT_RELAY_PORT))
     setProbeResult(null)
     setScanResults([])
@@ -134,6 +143,7 @@ export function NordVpnOutboundDialog({ open, onOpenChange }: NordVpnOutboundDia
     setCountryId(value)
     setServerId('')
     setServers([])
+    setServerSearch('')
     setProbeResult(null)
     setScanResults([])
     setScanProgress('')
@@ -315,8 +325,8 @@ export function NordVpnOutboundDialog({ open, onOpenChange }: NordVpnOutboundDia
               <PasswordInput id="nord-private-key" value={privateKey} onChange={event => { setPrivateKey(event.target.value); setProbeResult(null); setScanResults([]) }} placeholder="Loaded from token, or paste manually" className="h-10 font-mono" />
             </div>
 
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-2">
+            <div className="space-y-4">
+              <div className="space-y-2 sm:max-w-xs">
                 <Label>Exit country</Label>
                 <Select value={countryId} onValueChange={selectCountry} disabled={!privateKey.trim() || loading}>
                   <SelectTrigger><SelectValue placeholder="Choose country" /></SelectTrigger>
@@ -324,14 +334,48 @@ export function NordVpnOutboundDialog({ open, onOpenChange }: NordVpnOutboundDia
                 </Select>
               </div>
               <div className="space-y-2">
-                <Label>NordLynx server</Label>
-                <Select value={serverId} onValueChange={selectServer} disabled={!countryId || loadingServers || bulkProbing}>
-                  <SelectTrigger><SelectValue placeholder={loadingServers ? 'Loading servers...' : 'Choose server'} /></SelectTrigger>
-                  <SelectContent>{servers.map(server => {
-                    const result = scanResultByServerId.get(server.id)
-                    return <SelectItem key={server.id} value={String(server.id)}>{result ? result.alive ? `✓ ${result.delay}ms · ` : '✕ ' : ''}{server.hostname} · {server.city_name ?? 'Unknown city'} · {server.load}%</SelectItem>
-                  })}</SelectContent>
-                </Select>
+                <div className="flex items-end justify-between gap-3">
+                  <Label htmlFor="nord-server-search">NordLynx servers</Label>
+                  <span className="text-muted-foreground text-xs">{filteredServers.length} of {servers.length}</span>
+                </div>
+                <div className="relative">
+                  <Search className="text-muted-foreground pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2" />
+                  <Input id="nord-server-search" value={serverSearch} onChange={event => setServerSearch(event.target.value)} placeholder="Search city, hostname, or endpoint IP" className="h-10 pl-9" disabled={!countryId || loadingServers} />
+                </div>
+                <div className="max-h-64 overflow-auto rounded-lg border">
+                  <table className="w-full min-w-[620px] text-left text-sm">
+                    <thead className="bg-muted/95 text-muted-foreground sticky top-0 z-10 text-xs uppercase">
+                      <tr>
+                        <th className="w-10 px-3 py-2"><span className="sr-only">Selected</span></th>
+                        <th className="px-3 py-2 font-medium">Server</th>
+                        <th className="px-3 py-2 font-medium">City</th>
+                        <th className="px-3 py-2 font-medium">Endpoint IP</th>
+                        <th className="px-3 py-2 text-right font-medium">Load</th>
+                        <th className="px-3 py-2 text-right font-medium">Check</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y">
+                      {filteredServers.map(server => {
+                        const result = scanResultByServerId.get(server.id)
+                        const selected = serverId === String(server.id)
+                        return (
+                          <tr key={server.id} className={`cursor-pointer transition-colors hover:bg-cyan-500/10 ${selected ? 'bg-cyan-500/15' : ''}`} onClick={() => !bulkProbing && selectServer(String(server.id))}>
+                            <td className="px-3 py-2">{selected ? <Check className="size-4 text-cyan-600" /> : null}</td>
+                            <td className="px-3 py-2 font-medium">{server.hostname}</td>
+                            <td className="px-3 py-2">{server.city_name ?? 'Unknown'}</td>
+                            <td className="px-3 py-2 font-mono text-xs">{server.station}:51820</td>
+                            <td className="px-3 py-2 text-right">{server.load}%</td>
+                            <td className="px-3 py-2 text-right">
+                              {result ? <Badge variant={result.alive ? 'green' : 'destructive'}>{result.alive ? `${result.delay} ms` : 'Failed'}</Badge> : <span className="text-muted-foreground">Not tested</span>}
+                            </td>
+                          </tr>
+                        )
+                      })}
+                      {!loadingServers && filteredServers.length === 0 ? <tr><td colSpan={6} className="text-muted-foreground px-3 py-8 text-center">No matching servers found.</td></tr> : null}
+                      {loadingServers ? <tr><td colSpan={6} className="text-muted-foreground px-3 py-8 text-center">Loading servers...</td></tr> : null}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             </div>
 

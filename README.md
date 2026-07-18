@@ -6,6 +6,7 @@ Adds a one-session NordVPN gateway workflow to PasarGuard:
 - isolated **Check HTTP** test before adding a Nord outbound
 - safe country scanning that checks one endpoint at a time, stops after three
   working results, and automatically selects the fastest endpoint
+- searchable server table with city, endpoint IP, load, and check status
 - inbound-to-Nord routing without replacing the production Xray config
 - gateway topology so other nodes relay through one Nord-connected node
 - version-matched builds, backups, health checks, and automatic rollback
