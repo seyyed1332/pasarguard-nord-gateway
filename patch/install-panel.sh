@@ -35,7 +35,7 @@ cp "$PATCH_DIR/Dockerfile" "$SOURCE_DIR/Dockerfile.nord-patch"
 
 CURRENT_IMAGE_ID=$(docker inspect --format '{{.Image}}' "$CONTAINER")
 BASE_IMAGE="pasarguard/panel:${VERSION}-pre-nord-patch-$STAMP"
-PATCHED_IMAGE="pasarguard/panel:${VERSION}-nord-patch-2"
+PATCHED_IMAGE="pasarguard/panel:${VERSION}-nord-patch-3"
 docker tag "$CURRENT_IMAGE_ID" "$BASE_IMAGE"
 
 docker build \
@@ -80,7 +80,7 @@ NEW_CONTAINER=$(docker compose ps -q pasarguard)
 for _ in $(seq 1 30); do
   if docker exec "$NEW_CONTAINER" /code/healthcheck.sh >/dev/null 2>&1; then
     ROUTES=$(docker exec "$NEW_CONTAINER" python -c 'from app import create_app; paths=create_app().openapi()["paths"]; print(sum(path.startswith("/api/nordvpn") for path in paths))')
-    if [ "$ROUTES" -eq 6 ]; then
+    if [ "$ROUTES" -eq 7 ]; then
       echo "NordVPN patch installed on PasarGuard $VERSION"
       echo "image=$PATCHED_IMAGE"
       echo "backup=$BACKUP_DIR"

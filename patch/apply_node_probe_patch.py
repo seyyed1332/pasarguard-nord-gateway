@@ -17,12 +17,19 @@ def main() -> None:
         raise RuntimeError(f"Not a PasarGuard node source tree: {source}")
 
     text = latency_path.read_text(encoding="utf-8")
-    hook = """\tif strings.HasPrefix(request.GetName(), outboundHTTPProbePrefix) {
+    old_hook = """\tif strings.HasPrefix(request.GetName(), outboundHTTPProbePrefix) {
 \t\treturn x.probeOutboundHTTP(ctx, request.GetName())
 \t}
 
 """
-    if hook not in text:
+    hook = """\tif strings.HasPrefix(request.GetName(), outboundHTTPProbePrefix) || strings.HasPrefix(request.GetName(), outboundHTTPProbeBatchPrefix) {
+\t\treturn x.probeOutboundHTTP(ctx, request.GetName())
+\t}
+
+"""
+    if old_hook in text:
+        text = text.replace(old_hook, hook, 1)
+    elif hook not in text:
         function_marker = "func (x *Xray) GetOutboundsLatency(ctx context.Context, request *common.LatencyRequest) (*common.LatencyResponse, error) {\n"
         if text.count(function_marker) != 1:
             raise RuntimeError("PasarGuard node latency handler changed; no files were modified")

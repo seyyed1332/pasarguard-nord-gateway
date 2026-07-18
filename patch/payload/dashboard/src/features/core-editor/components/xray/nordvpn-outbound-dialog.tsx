@@ -10,14 +10,15 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useCoreEditorStore } from '@/features/core-editor/state/core-editor-store'
 import { appendRawXrayConfig } from '@/features/core-editor/kit/xray-adapter'
 import useDirDetection from '@/hooks/use-dir-detection'
-import { nordApi, type NordCoreImpact, type NordCountry, type NordGateway, type NordProbeResult, type NordServer } from '@/service/nordvpn'
+import { nordApi, type NordBulkProbeResult, type NordCoreImpact, type NordCountry, type NordGateway, type NordProbeResult, type NordServer } from '@/service/nordvpn'
 import type { Outbound, Profile } from '@pasarguard/xray-config-kit'
-import { CircleAlert, KeyRound, Network, Router, ShieldCheck, Zap } from 'lucide-react'
+import { Activity, CircleAlert, KeyRound, Network, Router, ShieldCheck, Zap } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 
 const RELAY_METHOD = '2022-blake3-aes-256-gcm'
 const DEFAULT_RELAY_PORT = 51830
+const BULK_PROBE_BATCH_SIZE = 96
 
 function apiErrorMessage(error: unknown): string {
   const detail = (error as { data?: { detail?: unknown } })?.data?.detail
@@ -68,9 +69,14 @@ export function NordVpnOutboundDialog({ open, onOpenChange }: NordVpnOutboundDia
   const [loadingServers, setLoadingServers] = useState(false)
   const [probing, setProbing] = useState(false)
   const [probeResult, setProbeResult] = useState<NordProbeResult | null>(null)
+  const [bulkProbing, setBulkProbing] = useState(false)
+  const [scanResults, setScanResults] = useState<NordBulkProbeResult[]>([])
+  const [scanProgress, setScanProgress] = useState('')
 
   const selectedServer = useMemo(() => servers.find(server => String(server.id) === serverId), [serverId, servers])
   const selectedGateway = useMemo(() => gateways.find(gateway => String(gateway.core_id) === gatewayId), [gatewayId, gateways])
+  const scanResultByServerId = useMemo(() => new Map(scanResults.map(result => [result.server_id, result])), [scanResults])
+  const workingScanResults = useMemo(() => scanResults.filter(result => result.alive).sort((a, b) => a.delay - b.delay), [scanResults])
   const relayPortNumber = Number(relayPort)
   const assignedNodeCount = impact?.nodes.length ?? (coreId ? null : 0)
   const gatewayCoreSafe = !coreId || assignedNodeCount === 1
@@ -102,11 +108,9 @@ export function NordVpnOutboundDialog({ open, onOpenChange }: NordVpnOutboundDia
     setServerId('')
     setRelayPort(String(DEFAULT_RELAY_PORT))
     setProbeResult(null)
+    setScanResults([])
+    setScanProgress('')
   }, [open])
-
-  useEffect(() => {
-    setProbeResult(null)
-  }, [privateKey, serverId])
 
   async function retrievePrivateKey() {
     if (!token.trim()) return
@@ -114,6 +118,8 @@ export function NordVpnOutboundDialog({ open, onOpenChange }: NordVpnOutboundDia
     try {
       const result = await nordApi.credentials(token.trim())
       setPrivateKey(result.private_key)
+      setProbeResult(null)
+      setScanResults([])
       setToken('')
       toast.success('NordLynx credentials loaded. The access token was not stored.')
     } catch (error) {
@@ -127,6 +133,9 @@ export function NordVpnOutboundDialog({ open, onOpenChange }: NordVpnOutboundDia
     setCountryId(value)
     setServerId('')
     setServers([])
+    setProbeResult(null)
+    setScanResults([])
+    setScanProgress('')
     setLoadingServers(true)
     try {
       const result = await nordApi.servers(Number(value))
@@ -136,6 +145,42 @@ export function NordVpnOutboundDialog({ open, onOpenChange }: NordVpnOutboundDia
       toast.error(apiErrorMessage(error))
     } finally {
       setLoadingServers(false)
+    }
+  }
+
+  function selectServer(value: string) {
+    setServerId(value)
+    const scanned = scanResultByServerId.get(Number(value))
+    setProbeResult(scanned ?? null)
+  }
+
+  async function scanAllServers() {
+    if (!coreId || !privateKey.trim() || !gatewayCoreSafe || servers.length === 0) return
+    setBulkProbing(true)
+    setProbeResult(null)
+    setScanResults([])
+    const collected: NordBulkProbeResult[] = []
+    try {
+      for (let start = 0; start < servers.length; start += BULK_PROBE_BATCH_SIZE) {
+        const batch = servers.slice(start, start + BULK_PROBE_BATCH_SIZE)
+        setScanProgress(`Testing ${start + 1}-${Math.min(start + batch.length, servers.length)} of ${servers.length}`)
+        const response = await nordApi.probeBulk(coreId, privateKey.trim(), batch)
+        collected.push(...response.results)
+        setScanResults([...collected])
+      }
+      const working = collected.filter(result => result.alive).sort((a, b) => a.delay - b.delay)
+      if (working[0]) {
+        setServerId(String(working[0].server_id))
+        setProbeResult(working[0])
+        toast.success(`${working.length} of ${collected.length} servers work. Selected ${working[0].hostname} at ${working[0].delay} ms.`)
+      } else {
+        toast.error(`No working server was found among ${collected.length} endpoints.`)
+      }
+    } catch (error) {
+      toast.error(apiErrorMessage(error))
+    } finally {
+      setBulkProbing(false)
+      setScanProgress('')
     }
   }
 
@@ -265,7 +310,7 @@ export function NordVpnOutboundDialog({ open, onOpenChange }: NordVpnOutboundDia
 
             <div className="space-y-2">
               <Label htmlFor="nord-private-key">NordLynx private key</Label>
-              <PasswordInput id="nord-private-key" value={privateKey} onChange={event => setPrivateKey(event.target.value)} placeholder="Loaded from token, or paste manually" className="h-10 font-mono" />
+              <PasswordInput id="nord-private-key" value={privateKey} onChange={event => { setPrivateKey(event.target.value); setProbeResult(null); setScanResults([]) }} placeholder="Loaded from token, or paste manually" className="h-10 font-mono" />
             </div>
 
             <div className="grid gap-4 sm:grid-cols-2">
@@ -278,11 +323,51 @@ export function NordVpnOutboundDialog({ open, onOpenChange }: NordVpnOutboundDia
               </div>
               <div className="space-y-2">
                 <Label>NordLynx server</Label>
-                <Select value={serverId} onValueChange={setServerId} disabled={!countryId || loadingServers}>
+                <Select value={serverId} onValueChange={selectServer} disabled={!countryId || loadingServers || bulkProbing}>
                   <SelectTrigger><SelectValue placeholder={loadingServers ? 'Loading servers...' : 'Choose server'} /></SelectTrigger>
-                  <SelectContent>{servers.map(server => <SelectItem key={server.id} value={String(server.id)}>{server.hostname} · {server.city_name ?? 'Unknown city'} · {server.load}%</SelectItem>)}</SelectContent>
+                  <SelectContent>{servers.map(server => {
+                    const result = scanResultByServerId.get(server.id)
+                    return <SelectItem key={server.id} value={String(server.id)}>{result ? result.alive ? `✓ ${result.delay}ms · ` : '✕ ' : ''}{server.hostname} · {server.city_name ?? 'Unknown city'} · {server.load}%</SelectItem>
+                  })}</SelectContent>
                 </Select>
               </div>
+            </div>
+
+            <div className="space-y-3 rounded-lg border border-cyan-500/30 bg-cyan-500/5 p-4">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2 text-sm font-medium"><Activity className="size-4 text-cyan-600" />Fast country scan</div>
+                  <p className="text-muted-foreground text-xs">
+                    Tests all {servers.length || 0} endpoints in parallel batches and automatically selects the fastest working server.
+                    Only 6 isolated checks run at once to protect node memory and the Nord session.
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={!coreId || !gatewayCoreSafe || !privateKey.trim() || servers.length === 0 || loadingServers || probing || bulkProbing}
+                  isLoading={bulkProbing}
+                  onClick={scanAllServers}
+                >
+                  <Activity className="size-4" />{bulkProbing ? scanProgress : `Scan all (${servers.length})`}
+                </Button>
+              </div>
+              {scanResults.length ? (
+                <div className="space-y-2 border-t border-cyan-500/20 pt-3">
+                  <div className="flex flex-wrap items-center gap-2 text-xs">
+                    <Badge variant="green">{workingScanResults.length} working</Badge>
+                    <Badge variant="outline">{scanResults.length - workingScanResults.length} failed</Badge>
+                    <span className="text-muted-foreground">Best results:</span>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {workingScanResults.slice(0, 6).map(result => (
+                      <Button key={result.server_id} type="button" size="sm" variant={serverId === String(result.server_id) ? 'default' : 'outline'} className="h-7 px-2 text-xs" onClick={() => selectServer(String(result.server_id))}>
+                        {result.hostname} · {result.delay}ms
+                      </Button>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
             </div>
 
             <div className="flex flex-col gap-3 rounded-lg border bg-muted/30 p-4 sm:flex-row sm:items-center sm:justify-between">
@@ -300,7 +385,7 @@ export function NordVpnOutboundDialog({ open, onOpenChange }: NordVpnOutboundDia
               <Button
                 type="button"
                 variant="secondary"
-                disabled={!coreId || !gatewayCoreSafe || !privateKey.trim() || !selectedServer || loading || loadingServers || probing}
+                disabled={!coreId || !gatewayCoreSafe || !privateKey.trim() || !selectedServer || loading || loadingServers || probing || bulkProbing}
                 isLoading={probing}
                 onClick={checkServer}
               >
@@ -316,7 +401,7 @@ export function NordVpnOutboundDialog({ open, onOpenChange }: NordVpnOutboundDia
 
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-              <Button type="button" disabled={!gatewayCoreSafe || !privateKey.trim() || !selectedServer || loading || loadingServers || probing || (probeRequired && !probeResult?.alive)} onClick={createGateway}>Add one-session gateway</Button>
+              <Button type="button" disabled={!gatewayCoreSafe || !privateKey.trim() || !selectedServer || loading || loadingServers || probing || bulkProbing || (probeRequired && !probeResult?.alive)} onClick={createGateway}>Add one-session gateway</Button>
             </DialogFooter>
           </TabsContent>
 

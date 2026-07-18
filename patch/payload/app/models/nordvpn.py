@@ -57,6 +57,35 @@ class NordProbeResponse(BaseModel):
     source: str
 
 
+class NordBulkProbeRequest(BaseModel):
+    core_id: int = Field(gt=0)
+    private_key: str = Field(min_length=40, max_length=128)
+    servers: list[NordServer] = Field(min_length=1, max_length=96)
+
+    @field_validator("private_key")
+    @classmethod
+    def strip_bulk_private_key(cls, value: str) -> str:
+        return value.strip()
+
+
+class NordBulkProbeResult(BaseModel):
+    server_id: int
+    hostname: str
+    load: int
+    node_id: int
+    node_name: str
+    alive: bool
+    delay: int
+    link: str
+    source: str
+
+
+class NordBulkProbeResponse(BaseModel):
+    scanned: int
+    working: int
+    results: list[NordBulkProbeResult]
+
+
 class NordImpactNode(BaseModel):
     id: int
     name: str

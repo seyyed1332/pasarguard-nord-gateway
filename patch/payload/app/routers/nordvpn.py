@@ -8,6 +8,9 @@ from app.db import AsyncSession, get_db
 from app.db.models import CoreConfig, CoreType, Node, NodeStatus
 from app.models.admin import AdminDetails
 from app.models.nordvpn import (
+    NordBulkProbeRequest,
+    NordBulkProbeResponse,
+    NordBulkProbeResult,
     NordCoreImpactResponse,
     NordCountry,
     NordCredentialsRequest,
@@ -17,6 +20,7 @@ from app.models.nordvpn import (
     NordImpactNode,
     NordProbeRequest,
     NordProbeResponse,
+    NordServer,
     NordServersResponse,
 )
 from app.operation import OperatorType
@@ -37,6 +41,38 @@ def _nodes_for_core_statement(core_id: int):
     if core_id == 1:
         return select(Node).where(or_(Node.core_config_id == 1, Node.core_config_id.is_(None)))
     return select(Node).where(Node.core_config_id == core_id)
+
+
+async def _probe_node(core_id: int, db: AsyncSession) -> Node:
+    core = await db.get(CoreConfig, core_id)
+    if core is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Core config not found.")
+    if core.type != CoreType.xray:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="NordVPN requires an Xray core.")
+
+    nodes = (await db.execute(_nodes_for_core_statement(core_id).order_by(Node.id))).scalars().all()
+    if len(nodes) != 1:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Assign this core to exactly one gateway node before checking Nord servers.",
+        )
+    node = nodes[0]
+    if node.status != NodeStatus.connected:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="The gateway node must be connected.")
+    return node
+
+
+def _nord_outbound(private_key: str, server: NordServer) -> dict:
+    return {
+        "tag": f"nord-{server.hostname}",
+        "protocol": "wireguard",
+        "settings": {
+            "secretKey": private_key,
+            "address": ["10.5.0.2/32"],
+            "peers": [{"publicKey": server.public_key, "endpoint": f"{server.station}:51820"}],
+            "noKernelTun": True,
+        },
+    }
 
 
 @router.post("/credentials", response_model=NordCredentialsResponse)
@@ -66,37 +102,8 @@ async def probe_nord_server(
     admin: AdminDetails = Depends(require_permission("cores", "update")),
     db: AsyncSession = Depends(get_db),
 ):
-    core = await db.get(CoreConfig, request.core_id)
-    if core is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Core config not found.")
-    if core.type != CoreType.xray:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="NordVPN requires an Xray core.")
-
-    nodes = (await db.execute(_nodes_for_core_statement(request.core_id).order_by(Node.id))).scalars().all()
-    if len(nodes) != 1:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Assign this core to exactly one gateway node before checking a Nord server.",
-        )
-    node = nodes[0]
-    if node.status != NodeStatus.connected:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="The gateway node must be connected.")
-
-    outbound = {
-        "tag": f"nord-{request.server.hostname}",
-        "protocol": "wireguard",
-        "settings": {
-            "secretKey": request.private_key,
-            "address": ["10.5.0.2/32"],
-            "peers": [
-                {
-                    "publicKey": request.server.public_key,
-                    "endpoint": f"{request.server.station}:51820",
-                }
-            ],
-            "noKernelTun": True,
-        },
-    }
+    node = await _probe_node(request.core_id, db)
+    outbound = _nord_outbound(request.private_key, request.server)
     encoded = base64.urlsafe_b64encode(json.dumps(outbound, separators=(",", ":")).encode()).decode().rstrip("=")
     probe_name = f"pg-http-probe:v1:{encoded}"
     result = await node_operator.get_outbounds_latency(node.id, name=probe_name, timeout=25)
@@ -113,6 +120,51 @@ async def probe_nord_server(
         delay=latency.delay,
         link=latency.link,
         source=latency.source,
+    )
+
+
+@router.post("/probe/bulk", response_model=NordBulkProbeResponse)
+async def probe_nord_servers_bulk(
+    request: NordBulkProbeRequest,
+    _: AdminDetails = Depends(require_permission("cores", "update")),
+    db: AsyncSession = Depends(get_db),
+):
+    node = await _probe_node(request.core_id, db)
+    outbounds = [_nord_outbound(request.private_key, server) for server in request.servers]
+    encoded = base64.urlsafe_b64encode(json.dumps(outbounds, separators=(",", ":")).encode()).decode().rstrip("=")
+    result = await node_operator.get_outbounds_latency(
+        node.id,
+        name=f"pg-http-probe:v2:{encoded}",
+        timeout=150,
+    )
+    if not result.latencies or any(item.source != "xray-http-probe" for item in result.latencies):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This node does not support fast Nord server scans yet. Update the PasarGuard node agent.",
+        )
+
+    latency_by_tag = {item.name: item for item in result.latencies}
+    results = []
+    for server in request.servers:
+        latency = latency_by_tag.get(f"nord-{server.hostname}")
+        results.append(
+            NordBulkProbeResult(
+                server_id=server.id,
+                hostname=server.hostname,
+                load=server.load,
+                node_id=node.id,
+                node_name=node.name,
+                alive=bool(latency and latency.alive),
+                delay=latency.delay if latency else 0,
+                link=latency.link if latency else "",
+                source=latency.source if latency else "xray-http-probe",
+            )
+        )
+    results.sort(key=lambda item: (not item.alive, item.delay if item.alive else 0, item.load, item.hostname))
+    return NordBulkProbeResponse(
+        scanned=len(results),
+        working=sum(item.alive for item in results),
+        results=results,
     )
 
 
