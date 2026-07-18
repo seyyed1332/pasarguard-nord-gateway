@@ -18,7 +18,8 @@ import { toast } from 'sonner'
 
 const RELAY_METHOD = '2022-blake3-aes-256-gcm'
 const DEFAULT_RELAY_PORT = 51830
-const BULK_PROBE_BATCH_SIZE = 96
+const BULK_PROBE_BATCH_SIZE = 6
+const BULK_PROBE_WORKING_TARGET = 3
 
 function apiErrorMessage(error: unknown): string {
   const detail = (error as { data?: { detail?: unknown } })?.data?.detail
@@ -167,12 +168,13 @@ export function NordVpnOutboundDialog({ open, onOpenChange }: NordVpnOutboundDia
         const response = await nordApi.probeBulk(coreId, privateKey.trim(), batch)
         collected.push(...response.results)
         setScanResults([...collected])
+        if (collected.filter(result => result.alive).length >= BULK_PROBE_WORKING_TARGET) break
       }
       const working = collected.filter(result => result.alive).sort((a, b) => a.delay - b.delay)
       if (working[0]) {
         setServerId(String(working[0].server_id))
         setProbeResult(working[0])
-        toast.success(`${working.length} of ${collected.length} servers work. Selected ${working[0].hostname} at ${working[0].delay} ms.`)
+        toast.success(`Found ${working.length} working servers after testing ${collected.length}. Selected ${working[0].hostname} at ${working[0].delay} ms.`)
       } else {
         toast.error(`No working server was found among ${collected.length} endpoints.`)
       }
@@ -336,10 +338,10 @@ export function NordVpnOutboundDialog({ open, onOpenChange }: NordVpnOutboundDia
             <div className="space-y-3 rounded-lg border border-cyan-500/30 bg-cyan-500/5 p-4">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div className="space-y-1">
-                  <div className="flex items-center gap-2 text-sm font-medium"><Activity className="size-4 text-cyan-600" />Fast country scan</div>
+                  <div className="flex items-center gap-2 text-sm font-medium"><Activity className="size-4 text-cyan-600" />Smart country scan</div>
                   <p className="text-muted-foreground text-xs">
-                    Tests all {servers.length || 0} endpoints in parallel batches and automatically selects the fastest working server.
-                    Only 6 isolated checks run at once to protect node memory and the Nord session.
+                    Safely checks one endpoint at a time and stops after finding {BULK_PROBE_WORKING_TARGET} working servers.
+                    Nord allows only one reliable handshake at a time for the same private key.
                   </p>
                 </div>
                 <Button
@@ -349,7 +351,7 @@ export function NordVpnOutboundDialog({ open, onOpenChange }: NordVpnOutboundDia
                   isLoading={bulkProbing}
                   onClick={scanAllServers}
                 >
-                  <Activity className="size-4" />{bulkProbing ? scanProgress : `Scan all (${servers.length})`}
+                  <Activity className="size-4" />{bulkProbing ? scanProgress : `Find fastest (${servers.length})`}
                 </Button>
               </div>
               {scanResults.length ? (

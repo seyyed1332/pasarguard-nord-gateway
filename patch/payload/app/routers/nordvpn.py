@@ -130,23 +130,21 @@ async def probe_nord_servers_bulk(
     db: AsyncSession = Depends(get_db),
 ):
     node = await _probe_node(request.core_id, db)
-    outbounds = [_nord_outbound(request.private_key, server) for server in request.servers]
-    encoded = base64.urlsafe_b64encode(json.dumps(outbounds, separators=(",", ":")).encode()).decode().rstrip("=")
-    result = await node_operator.get_outbounds_latency(
-        node.id,
-        name=f"pg-http-probe:v2:{encoded}",
-        timeout=150,
-    )
-    if not result.latencies or any(item.source != "xray-http-probe" for item in result.latencies):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="This node does not support fast Nord server scans yet. Update the PasarGuard node agent.",
-        )
-
-    latency_by_tag = {item.name: item for item in result.latencies}
     results = []
     for server in request.servers:
-        latency = latency_by_tag.get(f"nord-{server.hostname}")
+        outbound = _nord_outbound(request.private_key, server)
+        encoded = base64.urlsafe_b64encode(json.dumps(outbound, separators=(",", ":")).encode()).decode().rstrip("=")
+        response = await node_operator.get_outbounds_latency(
+            node.id,
+            name=f"pg-http-probe:v1:{encoded}",
+            timeout=10,
+        )
+        if not response.latencies or response.latencies[0].source != "xray-http-probe":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This node does not support Nord server checks yet. Update the PasarGuard node agent.",
+            )
+        latency = response.latencies[0]
         results.append(
             NordBulkProbeResult(
                 server_id=server.id,
@@ -154,10 +152,10 @@ async def probe_nord_servers_bulk(
                 load=server.load,
                 node_id=node.id,
                 node_name=node.name,
-                alive=bool(latency and latency.alive),
-                delay=latency.delay if latency else 0,
-                link=latency.link if latency else "",
-                source=latency.source if latency else "xray-http-probe",
+                alive=latency.alive,
+                delay=latency.delay,
+                link=latency.link,
+                source=latency.source,
             )
         )
     results.sort(key=lambda item: (not item.alive, item.delay if item.alive else 0, item.load, item.hostname))

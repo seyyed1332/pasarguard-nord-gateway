@@ -4,8 +4,8 @@ Adds a one-session NordVPN gateway workflow to PasarGuard:
 
 - Nord token to WireGuard credentials and server selection
 - isolated **Check HTTP** test before adding a Nord outbound
-- fast country-wide scanning with six isolated checks at once, ranked results,
-  and automatic selection of the fastest working endpoint
+- safe country scanning that checks one endpoint at a time, stops after three
+  working results, and automatically selects the fastest endpoint
 - inbound-to-Nord routing without replacing the production Xray config
 - gateway topology so other nodes relay through one Nord-connected node
 - version-matched builds, backups, health checks, and automatic rollback
@@ -51,9 +51,10 @@ The panel patch supports PasarGuard 5.0.3 and newer while its source markers
 remain compatible. The installers stop before changing Compose when an upstream
 source layout no longer matches. Node probe tests run before its image is built.
 
-The bulk scanner intentionally uses separate temporary Xray workers. Loading
-several Nord outbounds with one private key into one Xray process causes false
-failures, so workers are isolated and concurrency is limited to protect memory.
+Nord allows only one reliable WireGuard handshake at a time for the same private
+key. The scanner intentionally runs sequential isolated probes; parallel or
+batched key use produces false failures because the Nord identity roams between
+peers.
 
 This project contains modifications for GPL-3.0 projects and is distributed
 under GPL-3.0. It is not affiliated with PasarGuard, 3x-ui, or Nord Security.

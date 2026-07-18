@@ -26,7 +26,7 @@ const (
 	outboundHTTPProbeURL         = "https://www.gstatic.com/generate_204"
 	outboundHTTPProbeLimit       = 256 * 1024
 	outboundHTTPProbeMaxBatch    = 96
-	outboundHTTPProbeConcurrency = 6
+	outboundHTTPProbeConcurrency = 1
 )
 
 func validateOutboundHTTPProbe(outbound map[string]any) error {
@@ -215,7 +215,7 @@ func probeOutboundHTTPProcess(
 		return nil, fmt.Errorf("encode outbound probe config: %w", err)
 	}
 
-	processCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	processCtx, cancel := context.WithTimeout(ctx, 6*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(processCtx, executable, "-c", "stdin:")
 	cmd.Env = append(os.Environ(), "XRAY_LOCATION_ASSET="+assets)
@@ -250,7 +250,7 @@ func probeOutboundHTTPProcess(
 func probeHTTPProxy(ctx context.Context, tag string, port int) *common.Latency {
 	proxyURL, _ := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", port))
 	client := &http.Client{
-		Timeout: 4 * time.Second,
+		Timeout: 2 * time.Second,
 		Transport: &http.Transport{
 			Proxy:               http.ProxyURL(proxyURL),
 			DisableKeepAlives:   true,

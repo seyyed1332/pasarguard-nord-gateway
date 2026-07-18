@@ -29,7 +29,7 @@ CONTAINER=$(docker compose ps -q node)
 test -n "$CONTAINER"
 CURRENT_IMAGE_ID=$(docker inspect --format '{{.Image}}' "$CONTAINER")
 ROLLBACK_IMAGE="pasarguard/node:pre-nord-probe-$STAMP"
-PATCHED_IMAGE="pasarguard/node:${NODE_REF#v}-nord-probe-2"
+PATCHED_IMAGE="pasarguard/node:${NODE_REF#v}-nord-probe-3"
 docker tag "$CURRENT_IMAGE_ID" "$ROLLBACK_IMAGE"
 docker build -t "$PATCHED_IMAGE" "$SOURCE_DIR"
 

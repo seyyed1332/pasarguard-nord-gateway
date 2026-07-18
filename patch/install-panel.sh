@@ -35,7 +35,7 @@ cp "$PATCH_DIR/Dockerfile" "$SOURCE_DIR/Dockerfile.nord-patch"
 
 CURRENT_IMAGE_ID=$(docker inspect --format '{{.Image}}' "$CONTAINER")
 BASE_IMAGE="pasarguard/panel:${VERSION}-pre-nord-patch-$STAMP"
-PATCHED_IMAGE="pasarguard/panel:${VERSION}-nord-patch-3"
+PATCHED_IMAGE="pasarguard/panel:${VERSION}-nord-patch-4"
 docker tag "$CURRENT_IMAGE_ID" "$BASE_IMAGE"
 
 docker build \
