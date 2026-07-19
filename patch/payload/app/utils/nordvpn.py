@@ -6,10 +6,11 @@ from typing import Any
 import aiohttp
 from fastapi import HTTPException, status
 
-from app.models.nordvpn import NordCountry, NordServer
+from app.models.nordvpn import NordCountry, NordOpenVPNServer, NordServer
 
 NORD_API_BASE = "https://api.nordvpn.com"
 NORDLYNX_TECHNOLOGY_ID = 35
+OPENVPN_TCP_TECHNOLOGY_ID = 5
 MAX_RESPONSE_BYTES = 10 * 1024 * 1024
 REQUEST_TIMEOUT_SECONDS = 15
 
@@ -82,7 +83,7 @@ async def get_countries() -> list[NordCountry]:
             continue
         try:
             countries.append(NordCountry(id=int(item["id"]), name=str(item["name"]), code=str(item["code"])))
-        except KeyError, TypeError, ValueError:
+        except (KeyError, TypeError, ValueError):
             continue
     return sorted(countries, key=lambda country: country.name.casefold())
 
@@ -100,7 +101,7 @@ def parse_servers(data: Any) -> list[NordServer]:
             city = (location.get("country") or {}).get("city") or {}
             try:
                 location_cities[int(location["id"])] = (int(city["id"]), str(city["name"]))
-            except KeyError, TypeError, ValueError:
+            except (KeyError, TypeError, ValueError):
                 continue
 
     parsed = []
@@ -126,7 +127,7 @@ def parse_servers(data: Any) -> list[NordServer]:
         if location_ids:
             try:
                 city_id, city_name = location_cities.get(int(location_ids[0]), (None, None))
-            except TypeError, ValueError:
+            except (TypeError, ValueError):
                 pass
 
         try:
@@ -142,7 +143,7 @@ def parse_servers(data: Any) -> list[NordServer]:
                     public_key=public_key,
                 )
             )
-        except KeyError, TypeError, ValueError:
+        except (KeyError, TypeError, ValueError):
             continue
     return sorted(parsed, key=lambda server: (server.load, server.hostname))
 
@@ -163,3 +164,59 @@ async def get_servers(country_id: int) -> list[NordServer]:
             detail="NordVPN returned no usable NordLynx servers for this country.",
         )
     return servers
+
+
+async def get_openvpn_servers(country_id: int) -> list[NordOpenVPNServer]:
+    data = await _get_json(
+        "/v2/servers",
+        params={
+            "limit": "0",
+            "filters[servers_technologies][id]": str(OPENVPN_TCP_TECHNOLOGY_ID),
+            "filters[country_id]": str(country_id),
+        },
+    )
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="NordVPN returned invalid servers.")
+
+    location_cities: dict[int, tuple[int, str]] = {}
+    for location in data.get("locations") or []:
+        if not isinstance(location, dict):
+            continue
+        city = (location.get("country") or {}).get("city") or {}
+        try:
+            location_cities[int(location["id"])] = (int(city["id"]), str(city["name"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+
+    servers = []
+    for item in data.get("servers") or []:
+        if not isinstance(item, dict):
+            continue
+        city_id = None
+        city_name = None
+        location_ids = item.get("location_ids") or []
+        if location_ids:
+            try:
+                city_id, city_name = location_cities.get(int(location_ids[0]), (None, None))
+            except (TypeError, ValueError):
+                pass
+        try:
+            servers.append(
+                NordOpenVPNServer(
+                    id=int(item["id"]),
+                    name=str(item.get("name") or item["hostname"]),
+                    hostname=str(item["hostname"]),
+                    station=str(item["station"]),
+                    load=int(item.get("load") or 0),
+                    city_id=city_id,
+                    city_name=city_name,
+                )
+            )
+        except (KeyError, TypeError, ValueError):
+            continue
+    if not servers:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="NordVPN returned no OpenVPN TCP servers for this country.",
+        )
+    return sorted(servers, key=lambda server: (server.load, server.hostname))

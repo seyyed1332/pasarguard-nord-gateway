@@ -37,6 +37,47 @@ class NordServersResponse(BaseModel):
     servers: list[NordServer]
 
 
+class NordOpenVPNServer(BaseModel):
+    id: int
+    name: str
+    hostname: str
+    station: str
+    load: int
+    city_id: int | None = None
+    city_name: str | None = None
+
+
+class NordOpenVPNServersResponse(BaseModel):
+    servers: list[NordOpenVPNServer]
+
+
+class NordOpenVPNConnectRequest(BaseModel):
+    core_id: int = Field(gt=0)
+    hostname: str = Field(pattern=r"^[A-Za-z]{2}[0-9]+\.nordvpn\.com$", max_length=255)
+    username: str = Field(min_length=1, max_length=256)
+    password: str = Field(min_length=1, max_length=512)
+
+    @field_validator("hostname", "username", "password")
+    @classmethod
+    def strip_openvpn_fields(cls, value: str) -> str:
+        return value.strip()
+
+
+class NordOpenVPNCoreRequest(BaseModel):
+    core_id: int = Field(gt=0)
+
+
+class NordOpenVPNStatusResponse(BaseModel):
+    node_id: int
+    node_name: str
+    connected: bool
+    hostname: str
+    egress_ip: str
+    delay: int
+    proxy_address: str = "127.0.0.1"
+    proxy_port: int = 61991
+
+
 class NordProbeRequest(BaseModel):
     core_id: int = Field(gt=0)
     private_key: str = Field(min_length=40, max_length=128)

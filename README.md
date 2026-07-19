@@ -8,6 +8,8 @@ Adds a one-session NordVPN gateway workflow to PasarGuard:
   working results, and automatically selects the fastest endpoint
 - searchable server table with city, endpoint IP, load, and check status
 - cancellable country scans that preserve results already collected
+- isolated Nord OpenVPN TCP sidecar with a localhost-only SOCKS egress
+- separate OpenVPN UI using Nord manual-setup service credentials
 - inbound-to-Nord routing without replacing the production Xray config
 - gateway topology so other nodes relay through one Nord-connected node
 - version-matched builds, backups, health checks, and automatic rollback
@@ -52,6 +54,11 @@ credential that has been shared in logs, screenshots, or chat.
 The panel patch supports PasarGuard 5.0.3 and newer while its source markers
 remain compatible. The installers stop before changing Compose when an upstream
 source layout no longer matches. Node probe tests run before its image is built.
+
+The OpenVPN sidecar stores its service credentials only on the selected gateway
+node under `/var/lib/pg-node/nord-openvpn` with restricted permissions. It has
+its own network namespace, `/dev/net/tun`, and default route; the host route and
+the existing NordLynx gateway are not changed.
 
 Nord allows only one reliable WireGuard handshake at a time for the same private
 key. The scanner intentionally runs sequential isolated probes; parallel or

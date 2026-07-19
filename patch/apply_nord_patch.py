@@ -25,22 +25,23 @@ def patch_router(source: Path) -> str:
     return text.replace("    core.router,\n", "    nordvpn.router,\n    core.router,\n", 1)
 
 
-def add_shield_check_import(text: str, file_name: str) -> str:
+def add_nord_icon_imports(text: str, file_name: str) -> str:
     pattern = re.compile(r"import \{ ([^\n]+) \} from 'lucide-react'")
     match = pattern.search(text)
     if not match:
         raise RuntimeError(f"Could not find lucide-react import in {file_name}")
     names = [name.strip() for name in match.group(1).split(",")]
-    if "ShieldCheck" not in names:
-        names.append("ShieldCheck")
-        names.sort()
+    for icon in ("ShieldCheck", "Waves"):
+        if icon not in names:
+            names.append(icon)
+    names.sort()
     return text[: match.start()] + f"import {{ {', '.join(names)} }} from 'lucide-react'" + text[match.end() :]
 
 
 def patch_outbounds(source: Path) -> str:
     path = source / "dashboard/src/features/core-editor/components/xray/xray-outbounds-section.tsx"
     text = path.read_text(encoding="utf-8")
-    if "<NordVpnOutboundDialog" in text:
+    if "<NordVpnOutboundDialog" in text and "<NordOpenVpnDialog" in text:
         return text
 
     import_marker = "import { OutboundLatencyTestDialog } from '@/features/core-editor/components/xray/outbound-latency-test-dialog'\n"
@@ -48,16 +49,19 @@ def patch_outbounds(source: Path) -> str:
     text = text.replace(
         import_marker,
         import_marker
-        + "import { NordVpnOutboundDialog } from '@/features/core-editor/components/xray/nordvpn-outbound-dialog'\n",
+        + "import { NordVpnOutboundDialog } from '@/features/core-editor/components/xray/nordvpn-outbound-dialog'\n"
+        + "import { NordOpenVpnDialog } from '@/features/core-editor/components/xray/nord-openvpn-dialog'\n",
         1,
     )
-    text = add_shield_check_import(text, str(path))
+    text = add_nord_icon_imports(text, str(path))
 
     state_marker = "  const [latencyTestScope, setLatencyTestScope] = useState<LatencyTestScope | null>(null)\n"
     require_once(text, state_marker, str(path))
     text = text.replace(
         state_marker,
-        state_marker + "  const [nordDialogOpen, setNordDialogOpen] = useState(false)\n",
+        state_marker
+        + "  const [nordDialogOpen, setNordDialogOpen] = useState(false)\n"
+        + "  const [nordOpenVpnDialogOpen, setNordOpenVpnDialogOpen] = useState(false)\n",
         1,
     )
 
@@ -74,7 +78,11 @@ def patch_outbounds(source: Path) -> str:
     nord_button = """          <div className=\"flex items-center gap-2\">
             <Button type=\"button\" variant=\"outline\" size=\"sm\" className=\"h-9 border-cyan-500/40 px-2 text-cyan-700 sm:px-3 dark:text-cyan-300\" onClick={() => setNordDialogOpen(true)}>
               <ShieldCheck className=\"h-4 w-4\" />
-              <span className=\"hidden sm:inline\">NordVPN</span>
+              <span className=\"hidden sm:inline\">NordLynx</span>
+            </Button>
+            <Button type=\"button\" variant=\"outline\" size=\"sm\" className=\"h-9 border-sky-500/40 px-2 text-sky-700 sm:px-3 dark:text-sky-300\" onClick={() => setNordOpenVpnDialogOpen(true)}>
+              <Waves className=\"h-4 w-4\" />
+              <span className=\"hidden sm:inline\">Nord OpenVPN</span>
             </Button>
 """
     indented_current = "\n".join("  " + line if line else line for line in current_body.splitlines())
@@ -85,7 +93,8 @@ def patch_outbounds(source: Path) -> str:
     require_once(text, dialog_marker, str(path))
     text = text.replace(
         dialog_marker,
-        "      <NordVpnOutboundDialog open={nordDialogOpen} onOpenChange={setNordDialogOpen} />\n\n"
+        "      <NordVpnOutboundDialog open={nordDialogOpen} onOpenChange={setNordDialogOpen} />\n"
+        + "      <NordOpenVpnDialog open={nordOpenVpnDialogOpen} onOpenChange={setNordOpenVpnDialogOpen} />\n\n"
         + dialog_marker,
         1,
     )
@@ -147,7 +156,9 @@ def main() -> None:
         "app/routers/nordvpn.py",
         "app/utils/nordvpn.py",
         "dashboard/src/service/nordvpn.ts",
+        "dashboard/src/service/nord-openvpn.ts",
         "dashboard/src/features/core-editor/components/xray/nordvpn-outbound-dialog.tsx",
+        "dashboard/src/features/core-editor/components/xray/nord-openvpn-dialog.tsx",
     ]
     for relative in payload_files:
         if not (payload / relative).is_file():

@@ -18,6 +18,10 @@ from app.models.nordvpn import (
     NordGateway,
     NordGatewaysResponse,
     NordImpactNode,
+    NordOpenVPNConnectRequest,
+    NordOpenVPNCoreRequest,
+    NordOpenVPNServersResponse,
+    NordOpenVPNStatusResponse,
     NordProbeRequest,
     NordProbeResponse,
     NordServer,
@@ -75,6 +79,45 @@ def _nord_outbound(private_key: str, server: NordServer) -> dict:
     }
 
 
+async def _openvpn_command(node: Node, action: str, *, hostname: str = "", username: str = "", password: str = ""):
+    payload = {"action": action}
+    if action == "connect":
+        payload.update(hostname=hostname, username=username, password=password)
+    encoded = base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":")).encode()).decode().rstrip("=")
+    try:
+        result = await node_operator.get_outbounds_latency(node.id, name=f"pg-openvpn:v1:{encoded}", timeout=85)
+    except Exception as exc:
+        message = str(exc)
+        if "sidecar is not installed" in message or "OpenVPN control" in message:
+            message = "This node does not have the Nord OpenVPN agent yet. Install the latest node patch first."
+        elif "rejected the service credentials" in message:
+            message = "NordVPN rejected the service username or password."
+        elif "timed out" in message:
+            message = "The Nord OpenVPN connection timed out on the gateway node."
+        elif "SOCKS egress check failed" in message:
+            message = "OpenVPN connected, but its SOCKS egress check failed."
+        else:
+            message = "The Nord OpenVPN command failed on the gateway node."
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=message) from exc
+    if not result.latencies or result.latencies[0].source != "nord-openvpn-control":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This node does not support Nord OpenVPN yet. Install the latest node patch first.",
+        )
+    return result.latencies[0]
+
+
+def _openvpn_response(node: Node, latency) -> NordOpenVPNStatusResponse:
+    return NordOpenVPNStatusResponse(
+        node_id=node.id,
+        node_name=node.name,
+        connected=latency.alive,
+        hostname=latency.name or "",
+        egress_ip=latency.link if latency.alive else "",
+        delay=max(0, latency.delay),
+    )
+
+
 @router.post("/credentials", response_model=NordCredentialsResponse)
 async def fetch_nord_credentials(
     request: NordCredentialsRequest,
@@ -94,6 +137,51 @@ async def fetch_nord_servers(
     _: AdminDetails = Depends(require_permission("cores", "update")),
 ):
     return NordServersResponse(servers=await nordvpn.get_servers(country_id))
+
+
+@router.get("/openvpn/servers", response_model=NordOpenVPNServersResponse)
+async def fetch_nord_openvpn_servers(
+    country_id: int = Query(gt=0),
+    _: AdminDetails = Depends(require_permission("cores", "update")),
+):
+    return NordOpenVPNServersResponse(servers=await nordvpn.get_openvpn_servers(country_id))
+
+
+@router.post("/openvpn/connect", response_model=NordOpenVPNStatusResponse)
+async def connect_nord_openvpn(
+    request: NordOpenVPNConnectRequest,
+    _: AdminDetails = Depends(require_permission("cores", "update")),
+    db: AsyncSession = Depends(get_db),
+):
+    node = await _probe_node(request.core_id, db)
+    latency = await _openvpn_command(
+        node,
+        "connect",
+        hostname=request.hostname,
+        username=request.username,
+        password=request.password,
+    )
+    return _openvpn_response(node, latency)
+
+
+@router.post("/openvpn/status", response_model=NordOpenVPNStatusResponse)
+async def nord_openvpn_status(
+    request: NordOpenVPNCoreRequest,
+    _: AdminDetails = Depends(require_permission("cores", "update")),
+    db: AsyncSession = Depends(get_db),
+):
+    node = await _probe_node(request.core_id, db)
+    return _openvpn_response(node, await _openvpn_command(node, "status"))
+
+
+@router.post("/openvpn/disconnect", response_model=NordOpenVPNStatusResponse)
+async def disconnect_nord_openvpn(
+    request: NordOpenVPNCoreRequest,
+    _: AdminDetails = Depends(require_permission("cores", "update")),
+    db: AsyncSession = Depends(get_db),
+):
+    node = await _probe_node(request.core_id, db)
+    return _openvpn_response(node, await _openvpn_command(node, "disconnect"))
 
 
 @router.post("/probe", response_model=NordProbeResponse)
@@ -218,7 +306,7 @@ def _find_nord_gateway(core: CoreConfig, nodes: list[Node]) -> NordGateway | Non
             port = int(inbound["port"])
             method = str(settings["method"])
             password = str(settings["password"])
-        except KeyError, TypeError, ValueError:
+        except (KeyError, TypeError, ValueError):
             continue
         if not method or not password or not 1 <= port <= 65535:
             continue

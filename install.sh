@@ -60,7 +60,7 @@ fi
 
 if [ "$MODE" = node ] || [ "$MODE" = all ]; then
   [ -n "$NODE_DIR" ] || { echo "PasarGuard node compose directory was not found."; exit 1; }
-  echo "Installing the NordVPN HTTP-probe agent in $NODE_DIR"
+  echo "Installing the NordVPN probe agent and isolated OpenVPN sidecar in $NODE_DIR"
   NODE_DIR="$NODE_DIR" bash "$PATCH_ROOT/patch/install-node.sh"
 fi
 
